@@ -1,0 +1,203 @@
+'use strict';
+// electron-outlook : Outlook web dans sa propre fenêtre, avec l'Electron des dépôts Arch.
+// Apports par rapport à la PWA Chromium : bulle de non-lus sur l'icône de la barre des tâches (KDE),
+// fond orange à l'arrivée d'un mail, icône dans la zone de notification, fermeture = réduction,
+// lancement réduit avec la session.
+const { app, BrowserWindow, Menu, Tray, ipcMain, session, shell } = require('electron');
+const { execFile } = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const NOM = 'electron-outlook';
+const URL_ACCUEIL = 'https://outlook.cloud.microsoft/mail/';
+const PARTITION = 'persist:outlook';
+const DEBUG = process.env.ELECTRON_OUTLOOK_DEBUG === '1';
+const ICONE = path.join(__dirname, 'icones', `${NOM}-64.png`);
+const ICONE_ZONE = path.join(__dirname, 'icones', `${NOM}-32.png`);
+// Données (session Microsoft, cache, fenêtre) dans ~/.config/electron-outlook, et non ~/.config/Outlook.
+app.setPath('userData', path.join(app.getPath('appData'), NOM));
+const FICHIER_FENETRE = path.join(app.getPath('userData'), 'fenetre.json');
+
+// Domaines Microsoft gardés dans l'application (Outlook, connexion, fenêtres détachées).
+// Tout autre lien qui ouvre une nouvelle fenêtre part dans le navigateur par défaut.
+const DOMAINES_MICROSOFT = [
+  'cloud.microsoft', 'office.com', 'office365.com', 'outlook.com', 'live.com',
+  'microsoftonline.com', 'microsoft.com', 'msauth.net', 'msftauth.net',
+];
+const PERMISSIONS = new Set(['notifications', 'clipboard-read', 'clipboard-sanitized-write', 'fullscreen']);
+
+const log = (...a) => { if (DEBUG) console.log('[electron-outlook]', ...a); };
+
+function estMicrosoft(url) {
+  try {
+    const { protocol, hostname } = new URL(url);
+    return protocol === 'https:' && DOMAINES_MICROSOFT.some((d) => hostname === d || hostname.endsWith(`.${d}`));
+  } catch { return false; }
+}
+
+// Le WM_CLASS / app_id Wayland doit valoir « electron-outlook » pour que KDE relie la fenêtre
+// à electron-outlook.desktop (icône, regroupement, bulle).
+app.setName(NOM);
+app.setDesktopName(`${NOM}.desktop`);
+// Microsoft n'aime pas les navigateurs inconnus : on se présente comme un Chrome ordinaire.
+app.userAgentFallback = app.userAgentFallback.replace(/ (electron-outlook|Outlook|Electron)\/\S+/g, '');
+
+if (!app.requestSingleInstanceLock()) app.exit(0);
+
+let fenetre = null;
+let zone = null;
+let quitter = false;
+let nonLus = -1;
+
+function gdbus(args, rappel) {
+  execFile('gdbus', args, (err, sortie) => {
+    if (err) console.error('[electron-outlook] gdbus :', err.message);
+    else if (rappel) rappel(sortie);
+  });
+}
+
+// --- Fond orange du bouton dans la barre des tâches (« demande l'attention »).
+// flashFrame d'Electron ne fait rien sous Wayland : on passe par un script KWin, chargé par D-Bus.
+// KWin retire l'état tout seul quand la fenêtre est activée.
+function demanderAttention() {
+  const script = path.join(app.getPath('userData'), 'attention.js');
+  fs.writeFileSync(script, `for (const w of workspace.windowList())
+  if (w.desktopFileName === '${NOM}' && !w.active) w.demandsAttention = true;\n`);
+  const kwin = ['call', '--session', '--dest', 'org.kde.KWin'];
+  const nomScript = `${NOM}-attention`;
+  gdbus([...kwin, '--object-path', '/Scripting', '--method', 'org.kde.kwin.Scripting.unloadScript', nomScript], () => {
+    gdbus([...kwin, '--object-path', '/Scripting', '--method', 'org.kde.kwin.Scripting.loadScript', script, nomScript], (sortie) => {
+      const id = /-?\d+/.exec(sortie)?.[0];
+      if (!id || id === '-1') return;
+      gdbus([...kwin, '--object-path', `/Scripting/Script${id}`, '--method', 'org.kde.kwin.Script.run'], () => {
+        gdbus([...kwin, '--object-path', '/Scripting', '--method', 'org.kde.kwin.Scripting.unloadScript', nomScript]);
+      });
+    });
+  });
+}
+
+// --- Bulle : signal com.canonical.Unity.LauncherEntry, que la barre des tâches de Plasma affiche.
+// Fond orange en plus quand le nombre augmente (nouveau mail) et que la fenêtre n'est pas au premier plan.
+function majNonLus(n, initial = false) {
+  n = Math.max(0, Math.trunc(n) || 0);
+  const hausse = !initial && n > nonLus;
+  if (n === nonLus) return;
+  nonLus = n;
+  log('non-lus :', n, hausse ? '(nouveau)' : '');
+  if (hausse && fenetre && !fenetre.isFocused()) demanderAttention();
+  const proprietes = n > 0 ? `{'count': <int64 ${n}>, 'count-visible': <true>}` : "{'count-visible': <false>}";
+  gdbus(['emit', '--session', '--object-path', '/com/canonical/unity/launcherentry/1',
+    '--signal', 'com.canonical.Unity.LauncherEntry.Update', `application://${NOM}.desktop`, proprietes]);
+  if (zone) zone.setToolTip(n > 0 ? `Outlook — ${n} non lu${n > 1 ? 's' : ''}` : 'Outlook');
+}
+
+// --- Taille et position de la fenêtre, retenues d'une session à l'autre.
+function lireEtatFenetre() {
+  try { return JSON.parse(fs.readFileSync(FICHIER_FENETRE, 'utf8')); } catch { return { width: 1400, height: 900 }; }
+}
+function enregistrerEtatFenetre() {
+  if (!fenetre || fenetre.isMinimized()) return;
+  const etat = { ...fenetre.getNormalBounds(), maximise: fenetre.isMaximized() };
+  try { fs.writeFileSync(FICHIER_FENETRE, JSON.stringify(etat)); } catch { /* sans importance */ }
+}
+
+function afficher() {
+  if (!fenetre) return;
+  if (fenetre.isMinimized()) fenetre.restore();
+  fenetre.show();
+  fenetre.focus();
+}
+
+function creerFenetre(masquee) {
+  const etat = lireEtatFenetre();
+  fenetre = new BrowserWindow({
+    ...etat,
+    show: false,
+    title: 'Outlook',
+    icon: ICONE,
+    autoHideMenuBar: true,
+    backgroundColor: '#1b1b1b',
+    webPreferences: {
+      partition: PARTITION,
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+      spellcheck: true,
+    },
+  });
+  if (etat.maximise) fenetre.maximize();
+  // Au démarrage de la session (--masquee) : fenêtre réduite, pour garder son bouton et sa bulle.
+  fenetre.once('ready-to-show', () => {
+    if (masquee) { fenetre.showInactive(); fenetre.minimize(); } else fenetre.show();
+  });
+
+  const wc = fenetre.webContents;
+
+  // Nouvelles fenêtres : celles de Microsoft (connexion, message détaché) restent ici, le reste va dans le navigateur.
+  wc.setWindowOpenHandler(({ url }) => {
+    if (url === 'about:blank' || estMicrosoft(url)) {
+      log('fenêtre interne :', url);
+      return { action: 'allow', overrideBrowserWindowOptions: { autoHideMenuBar: true, icon: ICONE } };
+    }
+    log('navigateur :', url);
+    if (/^(https?|mailto):/.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+
+  fenetre.on('close', (e) => {
+    enregistrerEtatFenetre();
+    // Réduire plutôt que cacher : le bouton de la barre des tâches (bulle, fond orange) reste visible.
+    if (!quitter) { e.preventDefault(); fenetre.minimize(); }
+  });
+  fenetre.on('resize', enregistrerEtatFenetre);
+  fenetre.on('move', enregistrerEtatFenetre);
+
+  wc.loadURL(URL_ACCUEIL);
+
+}
+
+function creerZoneNotification() {
+  zone = new Tray(ICONE_ZONE);
+  zone.setToolTip('Outlook');
+  zone.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Afficher Outlook', click: afficher },
+    { label: 'Recharger', click: () => fenetre && fenetre.webContents.reload() },
+    { type: 'separator' },
+    { label: 'Quitter', click: () => { quitter = true; app.quit(); } },
+  ]));
+  zone.on('click', () => (fenetre && fenetre.isVisible() && !fenetre.isMinimized() && fenetre.isFocused() ? fenetre.minimize() : afficher()));
+}
+
+app.on('second-instance', afficher);
+app.on('before-quit', () => { quitter = true; });
+
+app.whenReady().then(() => {
+  const ses = session.fromPartition(PARTITION);
+  ses.setUserAgent(app.userAgentFallback);
+  ses.setSpellCheckerLanguages(['fr', 'en-US']);
+  ses.setPermissionRequestHandler((wc, permission, rappel, details) => {
+    const ok = PERMISSIONS.has(permission) && estMicrosoft(details.requestingUrl || wc.getURL());
+    log('permission', permission, ok ? 'accordée' : 'refusée');
+    rappel(ok);
+  });
+
+  // Compteur du dossier Boîte de réception en priorité ; badge d'Outlook seulement quand le dossier est introuvable.
+  // Le premier relevé de chaque source sert de point de départ (pas de fond orange au lancement).
+  let dossierTrouve = false;
+  const sourcesVues = new Set();
+  ipcMain.on('non-lus', (e, { source, n }) => {
+    if (!fenetre || e.sender !== fenetre.webContents) return;
+    log('non-lus reçus :', source, n);
+    if (n === null) { if (source === 'dossier') dossierTrouve = false; return; }
+    if (source === 'dossier') dossierTrouve = true;
+    else if (dossierTrouve) return;
+    const initial = !sourcesVues.has(source);
+    sourcesVues.add(source);
+    majNonLus(n, initial);
+  });
+
+  creerZoneNotification();
+  creerFenetre(process.argv.includes('--masquee'));
+  majNonLus(0, true);
+});

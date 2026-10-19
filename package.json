@@ -1,0 +1,11 @@
+{
+  "name": "electron-outlook",
+  "productName": "Outlook",
+  "version": "0.1.0",
+  "description": "Outlook web dans une fenêtre Electron, avec bulle de non-lus dans la barre des tâches de KDE",
+  "main": "main.js",
+  "desktopName": "electron-outlook.desktop",
+  "private": true,
+  "license": "MIT",
+  "author": "Nicolas Mouillet <ni.mouillet@gmail.com>"
+}
