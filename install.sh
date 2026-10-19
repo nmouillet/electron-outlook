@@ -61,4 +61,4 @@ fi
 update-desktop-database -q "$APPS" 2>/dev/null || true
 
 echo "✅ electron-outlook installé : menu de Plasma → Outlook."
-[ -f "$DEMARRAGE/$NOM.desktop" ] && echo "   Démarre avec la session, réduit dans la barre des tâches."
+if [ -f "$DEMARRAGE/$NOM.desktop" ]; then echo "   Démarre avec la session, réduit dans la barre des tâches."; fi
