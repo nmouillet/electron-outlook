@@ -2,7 +2,7 @@
 # Installe electron-outlook pour l'utilisateur courant (aucun droit admin, rejouable).
 # - lanceur ~/.local/share/applications/electron-outlook.desktop (menu de Plasma) ;
 # - icônes dans ~/.local/share/icons/hicolor ;
-# - démarrage avec la session, réduit dans la zone de notification (sauf avec --sans-demarrage).
+# - démarrage avec la session, réduit dans la barre des tâches (sauf avec --sans-demarrage).
 # Prérequis : sudo pacman -S --needed electron glib2
 #
 # Usage : ./install.sh [--sans-demarrage]      ./install.sh --desinstaller
@@ -43,7 +43,7 @@ Name=Outlook
 GenericName=Messagerie
 Comment=Outlook web dans une application Electron (bulle de non-lus, zone de notification)
 Exec=/usr/bin/electron "$DOSSIER"$1
-Icon=$NOM
+Icon=$ICONES/scalable/apps/$NOM.svg
 StartupWMClass=$NOM
 Categories=Network;Email;Office;
 Keywords=mail;courriel;microsoft;
@@ -61,4 +61,4 @@ fi
 update-desktop-database -q "$APPS" 2>/dev/null || true
 
 echo "✅ electron-outlook installé : menu de Plasma → Outlook."
-[ -f "$DEMARRAGE/$NOM.desktop" ] && echo "   Démarre avec la session, réduit dans la zone de notification."
+[ -f "$DEMARRAGE/$NOM.desktop" ] && echo "   Démarre avec la session, réduit dans la barre des tâches."
