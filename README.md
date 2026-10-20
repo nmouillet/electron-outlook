@@ -10,7 +10,7 @@ Fait pour KDE Plasma, où une PWA Chromium ne peut pas afficher le nombre de non
 | Bulle de non-lus sur l'icône de la barre des tâches | ❌ (Chromium ignore l'API Badging sous Linux) | ✅ |
 | Fond orange du bouton à l'arrivée d'un nouveau mail | ❌ | ✅ |
 | Icône dans la zone de notification, avec infobulle « n non lus » | ❌ | ✅ |
-| Fermer la fenêtre = la réduire (bouton, bulle et notifications restent) | ❌ | ✅ |
+| Fermer la fenêtre = la réduire (bouton, bulle et notifications restent), sans bloquer la déconnexion | ❌ | ✅ |
 | Démarrage avec la session, réduit | à la main | ✅ (`install.sh`) |
 | Propre icône et regroupement correct dans la barre des tâches | variable | ✅ |
 | Correctifs de sécurité du moteur | pacman (`chromium`) | pacman (`electron`) |
@@ -53,6 +53,10 @@ Outlook → *Paramètres → Général → Notifications* → activer les notifi
 - **Fermer, c'est réduire** : une fenêtre cachée n'aurait plus de bouton dans la barre des tâches, donc
   ni bulle ni fond orange. Au démarrage de la session (`--masquee`), la fenêtre s'ouvre réduite.
   Pour quitter : clic droit sur l'icône de la zone de notification → *Quitter*.
+  Sauf à la déconnexion ou à l'extinction : KWin demande alors à chaque fenêtre de se fermer, et une
+  fenêtre qui se réduit bloque la fin de session (« Les applications suivantes n'ont pas été fermées »,
+  déconnexion forcée au bout de 2 minutes). À chaque demande de fermeture, l'application interroge donc
+  ksmserver par D-Bus (`org.kde.KSMServerInterface.isShuttingDown`) : si la session se termine, elle quitte.
 - **Couleur de la bulle** : elle suit la couleur d'accentuation, car elle est compilée dans Plasma
   (`TaskBadgeOverlay`, paquet `plasma-desktop`) ; aucun réglage ne la change seule.
 - **Fenêtre reconnue par KDE** : `app.setDesktopName('electron-outlook.desktop')` donne l'identifiant
