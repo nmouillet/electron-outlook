@@ -3,7 +3,7 @@
 // Apports par rapport à la PWA Chromium : bulle de non-lus sur l'icône de la barre des tâches (KDE),
 // fond orange à l'arrivée d'un mail, icône dans la zone de notification, fermeture = réduction (sauf en fin de session),
 // lancement réduit avec la session.
-const { app, BrowserWindow, Menu, Tray, ipcMain, session, shell } = require('electron');
+const { app, BrowserWindow, Menu, Tray, clipboard, ipcMain, session, shell } = require('electron');
 const { execFile } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -33,6 +33,46 @@ function estMicrosoft(url) {
     const { protocol, hostname } = new URL(url);
     return protocol === 'https:' && DOMAINES_MICROSOFT.some((d) => hostname === d || hostname.endsWith(`.${d}`));
   } catch { return false; }
+}
+
+// Liens des mails réécrits par Microsoft Defender (*.safelinks.protection.outlook.com?url=…) : domaine
+// Microsoft, mais destination externe.
+function estSafeLinks(url) {
+  try { return new URL(url).hostname.endsWith('.safelinks.protection.outlook.com'); } catch { return false; }
+}
+// Adresse réelle d'un lien Safe Links, pour la copie.
+function lienReel(url) {
+  try { return estSafeLinks(url) ? new URL(url).searchParams.get('url') || url : url; } catch { return url; }
+}
+
+function ouvrirDansNavigateur(url) {
+  log('navigateur :', url);
+  if (/^(https?|mailto):/.test(url)) shell.openExternal(url);
+}
+
+// Menu contextuel (Electron n'en a aucun par défaut) : liens, texte sélectionné, champs de saisie.
+function menuContextuel(wc, p) {
+  const modele = [];
+  if (/^(https?|mailto):/.test(p.linkURL)) {
+    modele.push(
+      { label: 'Ouvrir le lien dans le navigateur', click: () => ouvrirDansNavigateur(p.linkURL) },
+      { label: "Copier l'adresse du lien", click: () => clipboard.writeText(lienReel(p.linkURL).replace(/^mailto:/, '')) },
+    );
+  }
+  if (p.isEditable && p.misspelledWord) {
+    if (modele.length) modele.push({ type: 'separator' });
+    for (const mot of p.dictionarySuggestions.slice(0, 5)) {
+      modele.push({ label: mot, click: () => wc.replaceMisspelling(mot) });
+    }
+    modele.push({ label: 'Ajouter au dictionnaire', click: () => wc.session.addWordToSpellCheckerDictionary(p.misspelledWord) });
+  }
+  if (p.isEditable || p.selectionText.trim()) {
+    if (modele.length) modele.push({ type: 'separator' });
+    if (p.isEditable) modele.push({ label: 'Couper', role: 'cut', enabled: p.editFlags.canCut });
+    modele.push({ label: 'Copier', role: 'copy', enabled: p.editFlags.canCopy });
+    if (p.isEditable) modele.push({ label: 'Coller', role: 'paste', enabled: p.editFlags.canPaste });
+  }
+  if (modele.length) Menu.buildFromTemplate(modele).popup({ window: BrowserWindow.fromWebContents(wc) });
 }
 
 // Le WM_CLASS / app_id Wayland doit valoir « electron-outlook » pour que KDE relie la fenêtre
@@ -146,13 +186,25 @@ function creerFenetre(masquee) {
 
   // Nouvelles fenêtres : celles de Microsoft (connexion, message détaché) restent ici, le reste va dans le navigateur.
   wc.setWindowOpenHandler(({ url }) => {
-    if (url === 'about:blank' || estMicrosoft(url)) {
+    if (url === 'about:blank' || (estMicrosoft(url) && !estSafeLinks(url))) {
       log('fenêtre interne :', url);
       return { action: 'allow', overrideBrowserWindowOptions: { autoHideMenuBar: true, icon: ICONE } };
     }
-    log('navigateur :', url);
-    if (/^(https?|mailto):/.test(url)) shell.openExternal(url);
+    ouvrirDansNavigateur(url);
     return { action: 'deny' };
+  });
+
+  // Fenêtre ouverte vide puis dirigée vers un lien externe (ou Safe Links) : le lien part dans le navigateur
+  // et la fenêtre se referme.
+  wc.on('did-create-window', (enfant) => {
+    enfant.webContents.on('will-navigate', (e) => {
+      const depart = enfant.webContents.getURL();
+      if (!e.isMainFrame || (depart && depart !== 'about:blank')) return;
+      if (estMicrosoft(e.url) && !estSafeLinks(e.url)) return;
+      e.preventDefault();
+      ouvrirDansNavigateur(e.url);
+      enfant.close();
+    });
   });
 
   fenetre.on('close', (e) => {
@@ -188,6 +240,7 @@ function creerZoneNotification() {
 }
 
 app.on('second-instance', afficher);
+app.on('web-contents-created', (e, wc) => wc.on('context-menu', (ev, p) => menuContextuel(wc, p)));
 app.on('before-quit', () => { quitter = true; });
 
 app.whenReady().then(() => {
