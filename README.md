@@ -20,14 +20,15 @@ Fait pour KDE Plasma, où une PWA Chromium ne peut pas afficher le nombre de non
 ```bash
 sudo pacman -S --needed electron glib2
 git clone <ce dépôt> ~/Projets/_perso/electron-outlook
-~/Projets/_perso/electron-outlook/install.sh            # avec démarrage automatique
-~/Projets/_perso/electron-outlook/install.sh --sans-demarrage
+~/Projets/_perso/electron-outlook/install.sh
+~/Projets/_perso/electron-outlook/install.sh --demarrage   # avec démarrage automatique
 ~/Projets/_perso/electron-outlook/install.sh --desinstaller
 ```
 
 `install.sh` ne demande aucun droit admin. Il crée `~/.local/share/applications/electron-outlook.desktop`,
-installe les icônes dans `~/.local/share/icons/hicolor` et, sauf `--sans-demarrage`,
-`~/.config/autostart/electron-outlook.desktop` (lancement réduit, option `--masquee`).
+installe les icônes dans `~/.local/share/icons/hicolor` et, seulement avec `--demarrage`,
+`~/.config/autostart/electron-outlook.desktop` (lancement réduit, option `--masquee`) ;
+sans cette option, il le retire s'il existe.
 Le lanceur pointe vers le dossier du dépôt : relancer `install.sh` si le dossier est déplacé.
 
 Au premier lancement, se connecter avec son compte Microsoft. Pour les notifications de bureau :
