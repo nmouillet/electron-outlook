@@ -51,6 +51,10 @@ Outlook → *Paramètres → Général → Notifications* → activer les notifi
   `demandsAttention` à vrai. KWin le retire quand la fenêtre est activée. La couleur (orange) est celle
   des avertissements du jeu de couleurs (`NeutralText`), pas l'accentuation. Le premier relevé au
   lancement sert de point de départ : pas de fond orange au démarrage.
+- **Clic sur une notification** : Outlook ouvre le message dans la page, mais son `window.focus()` laisse la
+  fenêtre réduite sous Wayland. `preload.js` enveloppe le constructeur `Notification` de la page pour relayer
+  chaque clic à `main.js`, qui remet la fenêtre au premier plan par un script KWin (`workspace.activeWindow`).
+  Ce script sert aussi au clic sur l'icône de la zone de notification et au relancement de l'application.
 - **Fermer, c'est réduire** : une fenêtre cachée n'aurait plus de bouton dans la barre des tâches, donc
   ni bulle ni fond orange. Au démarrage de la session (`--masquee`), la fenêtre s'ouvre réduite.
   Pour quitter : clic droit sur l'icône de la zone de notification → *Quitter*.

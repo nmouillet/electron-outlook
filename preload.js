@@ -26,9 +26,9 @@ setInterval(() => {
 }, 3000);
 
 window.addEventListener('message', (e) => {
-  if (e.source === window && e.data && e.data.__electronOutlook === 'badge') {
-    ipcRenderer.send('non-lus', { source: 'badge', n: e.data.n });
-  }
+  if (e.source !== window || !e.data) return;
+  if (e.data.__electronOutlook === 'badge') ipcRenderer.send('non-lus', { source: 'badge', n: e.data.n });
+  else if (e.data.__electronOutlook === 'notification') ipcRenderer.send('notification-cliquee');
 });
 
 contextBridge.executeInMainWorld({
@@ -37,5 +37,21 @@ contextBridge.executeInMainWorld({
     // Sans argument, l'API demande un simple point : on le compte comme 1.
     navigator.setAppBadge = (n) => { envoyer(n === undefined ? 1 : Number(n) || 0); return Promise.resolve(); };
     navigator.clearAppBadge = () => { envoyer(0); return Promise.resolve(); };
+  },
+});
+
+// Clic sur une notification système : Outlook ouvre le message, mais son window.focus() laisse la fenêtre réduite.
+// Chaque notification de la page signale son clic, relayé à main.js qui remet la fenêtre au premier plan.
+// Electron n'affiche pas les notifications de service worker : toutes passent par ce constructeur.
+contextBridge.executeInMainWorld({
+  func: () => {
+    const Origine = window.Notification;
+    if (!Origine) return;
+    window.Notification = class Notification extends Origine {
+      constructor(titre, options) {
+        super(titre, options);
+        this.addEventListener('click', () => window.postMessage({ __electronOutlook: 'notification' }, '*'));
+      }
+    };
   },
 });

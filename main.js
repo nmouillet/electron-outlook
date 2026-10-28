@@ -106,15 +106,13 @@ function finDeSession(rappel) {
   (err, sortie) => rappel(!err && /true/.test(sortie)));
 }
 
-// --- Fond orange du bouton dans la barre des tâches (« demande l'attention »).
-// flashFrame d'Electron ne fait rien sous Wayland : on passe par un script KWin, chargé par D-Bus.
-// KWin retire l'état tout seul quand la fenêtre est activée.
-function demanderAttention() {
-  const script = path.join(app.getPath('userData'), 'attention.js');
-  fs.writeFileSync(script, `for (const w of workspace.windowList())
-  if (w.desktopFileName === '${NOM}' && !w.active) w.demandsAttention = true;\n`);
+// --- Script KWin chargé par D-Bus, exécuté une fois puis déchargé : sous Wayland, une application ne peut
+// ni faire clignoter son bouton ni se remettre d'elle-même au premier plan.
+function scriptKWin(nom, code) {
+  const script = path.join(app.getPath('userData'), `${nom}.js`);
+  fs.writeFileSync(script, code);
   const kwin = ['call', '--session', '--dest', 'org.kde.KWin'];
-  const nomScript = `${NOM}-attention`;
+  const nomScript = `${NOM}-${nom}`;
   gdbus([...kwin, '--object-path', '/Scripting', '--method', 'org.kde.kwin.Scripting.unloadScript', nomScript], () => {
     gdbus([...kwin, '--object-path', '/Scripting', '--method', 'org.kde.kwin.Scripting.loadScript', script, nomScript], (sortie) => {
       const id = /-?\d+/.exec(sortie)?.[0];
@@ -124,6 +122,21 @@ function demanderAttention() {
       });
     });
   });
+}
+
+// --- Fond orange du bouton dans la barre des tâches (« demande l'attention ») : flashFrame d'Electron ne fait rien
+// sous Wayland. KWin retire l'état tout seul quand la fenêtre est activée.
+function demanderAttention() {
+  scriptKWin('attention', `for (const w of workspace.windowList())
+  if (w.desktopFileName === '${NOM}' && !w.active) w.demandsAttention = true;\n`);
+}
+
+// --- Premier plan : sous Wayland, restore() et focus() d'Electron laissent la fenêtre réduite (KWin ne rend
+// pas la main à une application qui la demande sans jeton d'activation). La fenêtre principale est la première
+// de l'application dans la liste de KWin, rangée par ordre de création : son titre change avec la page affichée.
+function activerFenetre() {
+  scriptKWin('activation', `for (const w of workspace.windowList())
+  if (w.desktopFileName === '${NOM}') { w.minimized = false; workspace.activeWindow = w; break; }\n`);
 }
 
 // --- Bulle : signal com.canonical.Unity.LauncherEntry, que la barre des tâches de Plasma affiche.
@@ -156,6 +169,7 @@ function afficher() {
   if (fenetre.isMinimized()) fenetre.restore();
   fenetre.show();
   fenetre.focus();
+  activerFenetre();
 }
 
 function creerFenetre(masquee) {
@@ -240,6 +254,8 @@ function creerZoneNotification() {
 }
 
 app.on('second-instance', afficher);
+// Clic sur une notification : Outlook ouvre le message dans la page, la fenêtre passe au premier plan.
+ipcMain.on('notification-cliquee', () => { log('notification cliquée'); afficher(); });
 app.on('web-contents-created', (e, wc) => wc.on('context-menu', (ev, p) => menuContextuel(wc, p)));
 app.on('before-quit', () => { quitter = true; });
 
